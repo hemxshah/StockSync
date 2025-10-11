@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "140635634339",
+    "project_id": "stocksync-176d1",
+    "storage_bucket": "stocksync-176d1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:140635634339:android:efef449d0700317e379d16",
+        "android_client_info": {
+          "package_name": "com.hxlabs.stocksync"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDlHhaeCVJpSCSq-RdKL_aiOOfJ5jxSh2A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
