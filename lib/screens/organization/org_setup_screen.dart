@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter/services.dart';
 import '../dashboard/manager_homescreen.dart';
+import '../employee/employee_homescreen.dart';
 
 class OrgSetupScreen extends StatefulWidget {
   const OrgSetupScreen({super.key});
@@ -17,7 +18,15 @@ class _OrgSetupScreenState extends State<OrgSetupScreen> {
   final _inviteCodeController = TextEditingController();
   bool _loading = false;
 
-  // 🔹 Create new organization
+
+
+  @override
+  void initState() {
+    super.initState();
+  }
+
+
+  /// ✅ Create new organization
   Future<void> _createOrganization() async {
     final orgName = _orgNameController.text.trim();
     if (orgName.isEmpty) {
@@ -35,6 +44,7 @@ class _OrgSetupScreenState extends State<OrgSetupScreen> {
         'name': orgName,
         'invite_code': inviteCode,
         'managers': [uid],
+        'pending_requests': [],
         'created_by': uid,
         'created_at': FieldValue.serverTimestamp(),
       });
@@ -53,7 +63,7 @@ class _OrgSetupScreenState extends State<OrgSetupScreen> {
     }
   }
 
-  // 🔹 Join organization using invite code
+  /// ✅ Request to join organization (not instant join)
   Future<void> _joinOrganization() async {
     final code = _inviteCodeController.text.trim();
     if (code.isEmpty) {
@@ -75,17 +85,38 @@ class _OrgSetupScreenState extends State<OrgSetupScreen> {
       }
 
       final org = orgSnap.docs.first;
+      final orgId = org.id;
       final uid = FirebaseAuth.instance.currentUser!.uid;
 
-      await FirebaseFirestore.instance.collection('users').doc(uid).update({
-        'org_id': org.id,
-        'role': 'employee',
+      // Add pending join request instead of auto joining
+      await FirebaseFirestore.instance.collection('organizations').doc(orgId).update({
+        'pending_requests': FieldValue.arrayUnion([uid]),
       });
 
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const ManagerHomeScreen()),
+      // update user doc with request state
+      await FirebaseFirestore.instance.collection('users').doc(uid).update({
+        'org_id': orgId,
+        'role': 'pending',
+      });
+
+      _showSnack(
+        'Join request sent successfully. A manager will approve your request soon.',
+      );
+
+      // You could add a simple dialog to tell them they’ll get access after approval
+      await showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Request Sent'),
+          content: const Text(
+              'Your request has been sent to the organization’s managers. You’ll get access once approved.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            )
+          ],
+        ),
       );
     } catch (e) {
       _showSnack('Error joining organization: $e');
@@ -94,16 +125,17 @@ class _OrgSetupScreenState extends State<OrgSetupScreen> {
     }
   }
 
-  // 🔹 Generate random invite code
+  /// 🔹 Generate random invite code
   String _generateInviteCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    return List.generate(6, (i) => chars[(DateTime.now().millisecondsSinceEpoch + i) % chars.length]).join();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    return List.generate(6, (i) => chars[(timestamp + i) % chars.length]).join();
   }
 
   void _showSnack(String msg) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
-  // 🔹 Dialog showing code & actions
+  /// ✅ Invite Code Dialog after creation
   void _showInviteDialog(String code) {
     showDialog(
       context: context,
@@ -167,9 +199,28 @@ class _OrgSetupScreenState extends State<OrgSetupScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Show splash/loading screen during org check
+    if (_checkingOrg) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Organization Setup')),
-      body: Padding(
+      appBar: AppBar(
+        title: const Text('Organization Setup'),
+        automaticallyImplyLeading: true,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            // safely return to previous (e.g., logout confirmation)
+            Navigator.pop(context);
+          },
+        ),
+      ),
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
