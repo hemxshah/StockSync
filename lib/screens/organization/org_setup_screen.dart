@@ -84,46 +84,155 @@ class _OrgSetupScreenState extends State<OrgSetupScreen> {
         return;
       }
 
-      final org = orgSnap.docs.first;
-      final orgId = org.id;
+      final orgDoc = orgSnap.docs.first;
+      final orgId = orgDoc.id;
       final uid = FirebaseAuth.instance.currentUser!.uid;
 
-      // Add pending join request instead of auto joining
-      await FirebaseFirestore.instance.collection('organizations').doc(orgId).update({
-        'pending_requests': FieldValue.arrayUnion([uid]),
+      final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final userName = userDoc.data()?['name'] ?? '';
+      final userEmail = userDoc.data()?['email'] ?? '';
+
+      final reqRef = FirebaseFirestore.instance
+          .collection('organizations')
+          .doc(orgId)
+          .collection('join_requests')
+          .doc(uid); // canonical id = uid
+
+      // transaction ensures atomic check-and-create (no duplicates)
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final snapshot = await tx.get(reqRef);
+        if (snapshot.exists) {
+          final existing = snapshot.data()!;
+          final status = existing['status'] ?? '';
+          if (status == 'pending') throw Exception('already_pending');
+          if (status == 'approved') throw Exception('already_approved');
+          if (status == 'rejected') throw Exception('previously_rejected');
+        }
+
+        tx.set(reqRef, {
+          'user_id': uid,
+          'user_name': userName,
+          'user_email': userEmail,
+          'status': 'pending',
+          'created_at': FieldValue.serverTimestamp(),
+          'updated_at': FieldValue.serverTimestamp(),
+        });
       });
 
-      // update user doc with request state
+      // update user role -> pending (optional: you may choose to delay setting org_id till approval)
       await FirebaseFirestore.instance.collection('users').doc(uid).update({
-        'org_id': orgId,
         'role': 'pending',
+        'org_id': orgId,
+        'updated_at': FieldValue.serverTimestamp(),
       });
 
-      _showSnack(
-        'Join request sent successfully. A manager will approve your request soon.',
-      );
-
-      // You could add a simple dialog to tell them they’ll get access after approval
-      await showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('Request Sent'),
-          content: const Text(
-              'Your request has been sent to the organization’s managers. You’ll get access once approved.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            )
-          ],
-        ),
-      );
+      _showSnack('Join request sent! Waiting for manager approval.');
     } catch (e) {
-      _showSnack('Error joining organization: $e');
+      final msg = e.toString();
+      if (msg.contains('already_pending')) {
+        _showSnack('You already have a pending request.');
+      } else if (msg.contains('already_approved')) {
+        _showSnack('Your request has already been approved.');
+      } else if (msg.contains('previously_rejected')) {
+        _showSnack('Your previous request was rejected. Contact your manager.');
+      } else {
+        _showSnack('Error joining organization: $e');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
+
+  // Future<void> _joinOrganization() async {
+  //   final code = _inviteCodeController.text.trim();
+  //   if (code.isEmpty) {
+  //     _showSnack('Enter an invite code to join.');
+  //     return;
+  //   }
+  //
+  //   setState(() => _loading = true);
+  //   try {
+  //     final orgSnap = await FirebaseFirestore.instance
+  //         .collection('organizations')
+  //         .where('invite_code', isEqualTo: code)
+  //         .limit(1)
+  //         .get();
+  //
+  //     if (orgSnap.docs.isEmpty) {
+  //       _showSnack('Invalid invite code.');
+  //       return;
+  //     }
+  //
+  //     final orgDoc = orgSnap.docs.first;
+  //     final orgId = orgDoc.id;
+  //     final uid = FirebaseAuth.instance.currentUser!.uid;
+  //
+  //     // 1) Check if user already is a member or has a pending/approved request
+  //     final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+  //     final existingOrgId = userDoc.data()?['org_id'] ?? '';
+  //     final existingRole = userDoc.data()?['role'] ?? '';
+  //
+  //     if (existingOrgId == orgId && (existingRole == 'employee' || existingRole == 'manager')) {
+  //       _showSnack('You are already a member of this organization.');
+  //       return;
+  //     }
+  //
+  //     // 2) Check join_requests for same user in this org (pending/approved)
+  //     final existingRequests = await FirebaseFirestore.instance
+  //         .collection('organizations')
+  //         .doc(orgId)
+  //         .collection('join_requests')
+  //         .where('user_id', isEqualTo: uid)
+  //         .get();
+  //
+  //     if (existingRequests.docs.isNotEmpty) {
+  //       final status = existingRequests.docs.first.data()['status'] ?? '';
+  //       if (status == 'pending') {
+  //         _showSnack('You already have a pending request. Please wait for approval.');
+  //         return;
+  //       } else if (status == 'approved') {
+  //         _showSnack('Your request was already approved. Please refresh or re-login.');
+  //         return;
+  //       } else if (status == 'rejected') {
+  //         // optionally allow re-request: fall through or show message
+  //         _showSnack('Your previous request was rejected. Contact manager or retry.');
+  //         return;
+  //       }
+  //     }
+  //
+  //     // 3) Create new join request
+  //     final userName = userDoc.data()?['name'] ?? '';
+  //     final userEmail = userDoc.data()?['email'] ?? '';
+  //
+  //     await FirebaseFirestore.instance
+  //         .collection('organizations')
+  //         .doc(orgId)
+  //         .collection('join_requests')
+  //         .add({
+  //       'user_id': uid,
+  //       'user_name': userName,
+  //       'user_email': userEmail,
+  //       'status': 'pending',
+  //       'created_at': FieldValue.serverTimestamp(),
+  //       'updated_at': FieldValue.serverTimestamp(),
+  //     });
+  //
+  //     // Update user record role => pending and link org_id (optional: you may prefer not to set org_id until approved)
+  //     await FirebaseFirestore.instance.collection('users').doc(uid).update({
+  //       'role': 'pending',
+  //       'org_id': orgId,
+  //       'updated_at': FieldValue.serverTimestamp(),
+  //     });
+  //
+  //     _showSnack('Join request sent! Waiting for manager approval.');
+  //   } catch (e) {
+  //     _showSnack('Error joining organization: $e');
+  //   } finally {
+  //     if (mounted) setState(() => _loading = false);
+  //   }
+  // }
+
+
 
   /// 🔹 Generate random invite code
   String _generateInviteCode() {
@@ -200,25 +309,48 @@ class _OrgSetupScreenState extends State<OrgSetupScreen> {
   @override
   Widget build(BuildContext context) {
     // Show splash/loading screen during org check
-    if (_checkingOrg) {
-      return const Scaffold(
-        body: Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-    }
+    // if (_checkingOrg) {
+    //   return const Scaffold(
+    //     body: Center(
+    //       child: CircularProgressIndicator(),
+    //     ),
+    //   );
+    // }
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Organization Setup'),
         automaticallyImplyLeading: true,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            // safely return to previous (e.g., logout confirmation)
-            Navigator.pop(context);
-          },
-        ),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Go Back'),
+                  content: const Text('Do you want to go back to the login screen? This will sign you out.'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Yes'),
+                    ),
+                  ],
+                ),
+              );
+
+              if (confirm == true) {
+                await FirebaseAuth.instance.signOut(); // ✅ Important: log out user
+                if (context.mounted) {
+                  Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
+                }
+              }
+            },
+          ),
+
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
